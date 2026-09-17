@@ -402,13 +402,25 @@ async function publishPhpInfo(runtimeConfig, reason) {
   });
 }
 
+// The Fetch spec forbids a body on these statuses. phpResponseToResponse()
+// already honours that when it builds the Response, but arrayBuffer() on a
+// null-body Response resolves to an empty-but-PRESENT ArrayBuffer, and the
+// service worker rebuilds this message with new Response(body, {status}) --
+// which throws for exactly these statuses.
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
 function serializeResponse(response) {
-  return response.arrayBuffer().then((body) => ({
+  const head = {
     status: response.status,
     statusText: response.statusText,
     headers: Object.fromEntries(response.headers.entries()),
-    body,
-  }));
+  };
+
+  if (NULL_BODY_STATUSES.has(response.status)) {
+    return Promise.resolve({ ...head, body: null });
+  }
+
+  return response.arrayBuffer().then((body) => ({ ...head, body }));
 }
 
 function deserializeRequest(requestLike) {

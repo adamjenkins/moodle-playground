@@ -245,6 +245,10 @@ async function broadcastToClients(message) {
   }
 }
 
+// Statuses the Fetch spec forbids a body on. Kept in step with the copies in
+// src/runtime/php-compat.js and php-worker.js; a shared module would be better.
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
 function ensureBridge(scopeId) {
   if (bridges.has(scopeId)) {
     return bridges.get(scopeId);
@@ -262,11 +266,22 @@ function ensureBridge(scopeId) {
     clearTimeout(entry.timeoutId);
 
     if (message.kind === "http-response") {
-      entry.resolve(new Response(message.response.body, {
-        status: message.response.status,
-        statusText: message.response.statusText,
-        headers: message.response.headers,
-      }));
+      // Defence in depth: this listener has already removed the pending entry
+      // and cleared its timeout, so a throw here strands the request forever --
+      // the caller's promise never settles AND the 504 timeout that would have
+      // surfaced it is gone. Always settle, even on a malformed reply.
+      try {
+        const status = message.response.status;
+        entry.resolve(new Response(NULL_BODY_STATUSES.has(status) ? null : message.response.body, {
+          status,
+          statusText: message.response.statusText,
+          headers: message.response.headers,
+        }));
+      } catch (error) {
+        entry.resolve(
+          buildErrorResponse(`Malformed PHP worker reply: ${error?.message || error}`, 502),
+        );
+      }
       return;
     }
 
